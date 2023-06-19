@@ -1,0 +1,6 @@
+Compiler optinon:
+
+g++ -I/usr/include/postgresql/ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags gtk4` `pkg-config --libs gtk4` `pkg-config --cflags opencv4` `pkg-config --libs opencv4` -lpq // дополнительно -std=c++11 -Wall
+
+Used libs:
+GTK4, OpenCV, PostgresSQL, PQXX.
