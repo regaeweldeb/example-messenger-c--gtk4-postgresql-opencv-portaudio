@@ -1,8 +1,8 @@
-Compiler optinon:
+Compiler option:
 
 g++ -I/usr/include/postgresql/ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags gtk4` `pkg-config --libs gtk4` `pkg-config --cflags opencv4` `pkg-config --libs opencv4` -lpq -lpqxx -lportaudio -I/usr/include/portaudio -lb64
 
 Used libs:
 GTK4, OpenCV, PostgresSQL, PQXX, PortAudio, b64.
 
-sudo apt-get install libb64-dev
+sudo apt-get install libb64-dev (and etc...)
