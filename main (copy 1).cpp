@@ -1,10 +1,7 @@
 #include <gtk/gtk.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
-#include <gtk/gtkmediafile.h>
-#include <gtk/gtkmediastream.h>
-#include <gtk/gtkmediacontrols.h>
 
-//g++ -I/usr/include/postgresql/ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags gtk4` `pkg-config --libs gtk4` `pkg-config --cflags opencv4` `pkg-config --libs opencv4` -lpq -lpqxx -lportaudio -I/usr/include/portaudio -lsndfile
+//g++ -I/usr/include/postgresql/ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags gtk4` `pkg-config --libs gtk4` `pkg-config --cflags opencv4` `pkg-config --libs opencv4` -lpq -lpqxx -lportaudio -I/usr/include/portaudio
 //g++ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags opencv4` `pkg-config --libs opencv4`
 #include <thread>
 #include <iostream>
@@ -28,16 +25,10 @@
 #include <portaudio.h>
 #include <cstddef>
 
-#include <sndfile.h>
-
-#include <stdio.h>
-#include <lame/lame.h>
-
-#define MP3_BUFFER_SIZE 8192
+#include "b64/encode.h"
 
 // Количество сэмплов за один буфер
 #define SAMPLES_PER_BUFFER     (512)
-
 
 /////////////////////////////////
 GtkApplication *app;
@@ -48,7 +39,7 @@ GtkWidget *window_call_audio;
 using namespace cv;
 using namespace std;
 using namespace pqxx;
-//using namespace  base64;
+using namespace  base64;
 
 typedef struct {
 	GtkWidget *username;
@@ -105,45 +96,6 @@ int timer_id_dialog;
 static void auth (GtkWidget *widget);
 static void main_messenger (GtkWidget *widget, EntryData *entryData);
 
-void wav_to_mp3(const char* input_filename) {
-    
-    FILE *input_file = fopen(input_filename, "rb");
-    FILE *output_file = fopen("output.mp3", "wb");
-    
-    if (input_file == NULL || output_file == NULL) {
-        printf("Error opening files\n");
-    }
-    
-    // Initialize the MP3 encoder
-    lame_t lame = lame_init();
-    lame_set_in_samplerate(lame, 44100);
-    lame_set_out_samplerate(lame, 44100);
-    lame_set_num_channels(lame, 2);
-    lame_set_VBR(lame, vbr_default);
-    lame_init_params(lame);
-    
-    // Read WAV data and write MP3 data
-    short wav_buffer[MP3_BUFFER_SIZE*2];
-    unsigned char mp3_buffer[MP3_BUFFER_SIZE];
-    int read_size = 0;
-    int write_size = 0;
-    
-    do {
-        read_size = fread(wav_buffer, 2, MP3_BUFFER_SIZE, input_file);
-        write_size = lame_encode_buffer_interleaved(lame, wav_buffer, read_size, mp3_buffer, MP3_BUFFER_SIZE);
-        fwrite(mp3_buffer, write_size, 1, output_file);
-    } while (read_size > 0);
-    
-    // Flush remaining MP3 data
-    write_size = lame_encode_flush(lame, mp3_buffer, MP3_BUFFER_SIZE);
-    fwrite(mp3_buffer, write_size, 1, output_file);
-    
-    // Cleanup resources
-    lame_close(lame);
-    fclose(input_file);
-    fclose(output_file);
-}
-
 char *rtrim(char *str) {
 	if(str == NULL)  return NULL;
 	char *end = str + strlen(str) - 1;
@@ -156,12 +108,7 @@ void on_window_call_audio_destroy(GtkWidget *widget, gpointer data);
 
 PaStream* streamAudio;
 
-// Переменная для хранения бинарных данных звука
-unsigned char* audioData;
-unsigned long audioDataSize;
-
-SNDFILE* outfile;
-SF_INFO sfinfo;
+int ii_data = 0;
 
 // Функция-колбэк обработки звука
 static int patestCallback(const void* inputBuffer, void* outputBuffer,
@@ -170,7 +117,44 @@ static int patestCallback(const void* inputBuffer, void* outputBuffer,
                           PaStreamCallbackFlags statusFlags,
                           void* userData)
 {
+    char* data = new char[framesPerBuffer * sizeof(float)];
+    memcpy(data, inputBuffer, framesPerBuffer * sizeof(float));
+    
+	// Encode the data as Base64
+	char* encodedData = new char[framesPerBuffer * sizeof(float) * 2]; // Allocate enough memory for the encoded data
+	base64_encodestate state;
+	base64_init_encodestate(&state);
+	int encodedLength = base64_encode_block(data, framesPerBuffer * sizeof(float), encodedData, &state);
+	encodedLength += base64_encode_blockend(encodedData + encodedLength, &state);
+
+	// Convert the encoded data to bytea
+	const char* byteaPrefix = "\\x"; // Prefix required for bytea values in PostgreSQL
+	char* byteaData = new char[encodedLength * 2 + 3]; // Allocate enough memory for the bytea value
+	byteaData[0] = '\'';
+	byteaData[1] = '\\';
+	byteaData[2] = 'x';
+	for (int i = 0; i < encodedLength; i++) {
+		sprintf(byteaData + i * 2 + 3, "%02x", (unsigned char)encodedData[i]);
+	}
+	byteaData[encodedLength * 2 + 3] = '\'';
+	byteaData[encodedLength * 2 + 4] = '\0';
+
+	// SQL запрос
+	const char* query = "INSERT INTO audio_data (audio) VALUES ($1::bytea)";
+	const char* paramValues[1] = { byteaData };
+	int paramLengths[1] = { static_cast<int>(strlen(byteaData)) };
+	int paramFormats[1] = { 1 };
+	PGresult* res = PQexecParams(conn, query, 1, NULL, paramValues, paramLengths, paramFormats, 0);
+    
+    if (PQresultStatus(res) == PGRES_COMMAND_OK) {
+		printf("INSERT AUDIO \n");
+	} else {
+		printf("Failed INSERT AUDIO: %s\n", PQerrorMessage(conn));
+	}
+	PQclear(res);
 	
+ 	usleep(2000000);
+    
     // Изменяем тип буфера на нужный
     float* out = (float*)outputBuffer;
     const float* in = (const float*)inputBuffer;
@@ -180,12 +164,15 @@ static int patestCallback(const void* inputBuffer, void* outputBuffer,
     {
         out[i] = in[i];
     }
+    
+	delete[] data;
+	delete[] encodedData;
 	
     return paContinue;
 }
 
 void *capture_audio(void *data2)
-{  
+{
     PaError err;
     
     float buffer[SAMPLES_PER_BUFFER];
@@ -238,11 +225,6 @@ void on_button_call_audio(GtkWidget *widget, EntryData *entryData) {
 		gtk_window_set_title(GTK_WINDOW(window_call_audio), "Mamaq Messenger - Audio Call");
 		gtk_window_set_default_size(GTK_WINDOW(window_call_audio), 200, 200);
 		
-		sfinfo.samplerate = 44100;
-		sfinfo.channels = 1;
-		sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
-		outfile = sf_open("output.wav", SFM_WRITE, &sfinfo);
-		
 		/*boxMainVideoCall = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 		int width = 640;
 		int height = 480;
@@ -264,12 +246,19 @@ void on_button_call_audio(GtkWidget *widget, EntryData *entryData) {
 		g_signal_connect(window_call_audio, "destroy", G_CALLBACK(on_window_call_audio_destroy), NULL);
 }
 
-void on_window_call_audio_destroy(GtkWidget *widget, gpointer data) {
-	sf_close(outfile);  
+void on_window_call_audio_destroy(GtkWidget *widget, gpointer data) {   
     audio_thread = NULL;
     Pa_StopStream(streamAudio); 
     Pa_CloseStream(streamAudio);
 }
+
+/*
+void remove_child(GtkWidget *widget, gpointer data) {
+    GtkWidget *child = GTK_WIDGET(widget);
+    gtk_container_remove(GTK_CONTAINER(data), child);
+}*/
+
+//void on_window_call_video_destroy(GtkWidget *widget, gpointer data);
 
 // Объявляем переменные
 gboolean run_video;
@@ -1024,30 +1013,6 @@ void main_messenger(GtkWidget *widget, EntryData *entryData) {
 		timer_id_contacts = g_timeout_add_seconds(1, (GSourceFunc)update_contacts_list, NULL);
 
 		timer_id_dialog = g_timeout_add_seconds(1, (GSourceFunc)update_dialog, entryData);
-		
-		//wav_to_mp3("output.wav");
-		
-		// создание медиаплеера
-		//GtkMediaStream *mediaStream = GTK_MEDIA_STREAM(gtk_media_file_new());
-		//gtk_media_file_set_file(GTK_MEDIA_FILE(mediaStream), g_file_new_for_path("/home/s3nsi/c++/GTK/messenger/output.wav"));
-
-		//GtkMediaControls *mediaControls = GTK_MEDIA_CONTROLS(gtk_media_controls_new(mediaStream));
-		//gtk_media_controls_set_media_stream(mediaControls, mediaStream);
-
-		// воспроизведение видео файла
-		//gtk_media_stream_play(mediaStream);
-		
-		GtkMediaFile* videoFile = GTK_MEDIA_FILE(gtk_media_file_new_for_file(g_file_new_for_path("/home/s3nsi/c++/GTK/messenger/output.wav")));
-		GtkVideo* videoPlayer = GTK_VIDEO(gtk_video_new_for_media_stream(GTK_MEDIA_STREAM(videoFile)));
-		GtkOverlay* videoOverlay = GTK_OVERLAY(gtk_widget_get_first_child(GTK_WIDGET(videoPlayer)));
-		GtkRevealer* videoControls = GTK_REVEALER(gtk_widget_get_last_child(GTK_WIDGET(videoOverlay)));
-
-		/*GtkMediaPlayer *player = gtk_media_player_new();
-		gtk_media_player_set_media(media_player, media_file);
-
-		GtkWidget *player_widget = gtk_media_player_get_control_widget(player);*/
-
-		gtk_box_append(GTK_BOX(boxDialogMenu), GTK_WIDGET(videoControls));
 		
 		
 		// Создание кнопки отправки

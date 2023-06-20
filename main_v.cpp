@@ -1,7 +1,7 @@
 #include <gtk/gtk.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
-//g++ -I/usr/include/postgresql/ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags gtk4` `pkg-config --libs gtk4` `pkg-config --cflags opencv4` `pkg-config --libs opencv4` -lpq // дополнительно -std=c++11 -Wall
+//g++ -I/usr/include/postgresql/ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags gtk4` `pkg-config --libs gtk4` `pkg-config --cflags opencv4` `pkg-config --libs opencv4` -lpq -lpqxx
 //g++ -I/usr/include/opencv4 -o main main.cpp `pkg-config --cflags opencv4` `pkg-config --libs opencv4`
 #include <thread>
 #include <iostream>
@@ -127,9 +127,11 @@ void *capture_video(void *data) {
 	Mat image(480, 640, CV_8UC3, Scalar(0));
 	while(run_video) {
 		work W(C);
-		result R = W.exec("SELECT image_data FROM video_stream WHERE id=0");
+		result R = W.exec("SELECT image_data FROM video_stream WHERE id=(SELECT MAX(id) FROM video_stream) LIMIT 1");
 		binarystring bs(R[0]["image_data"].as<std::string>());
 		memcpy(image.data, bs.data(), bs.size());
+		
+		usleep(2000000);
 		
 		/*const char* select_query = "SELECT image_data FROM video_stream WHERE id=0";
 		PGresult* res = PQexec(conn, select_query);
@@ -164,7 +166,7 @@ void *capture_video(void *data) {
 		    pixbuf = NULL;
 		}
 		
-		usleep(1000);
+		//usleep(1000);
 	}
     return NULL;
 }
